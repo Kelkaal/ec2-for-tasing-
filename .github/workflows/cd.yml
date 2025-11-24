@@ -118,7 +118,7 @@ jobs:
             SSH_KEY_CONTENT="$STAGING_SSH_KEY"
             DB_NAME=${{ secrets.STAGING_DB_NAME }}
             REMOTE_DIR="/home/ubuntu/apps/backend/ec2-for-tasing"
-            REPO_URL="https://github.com/Kelkaal/ec2-for-tasing-.git"
+            REPO_URL="https://github.com/PreciousEzeigbo/legal-watch-dog-be.git"
             ALLOW_TEST_EMAILS=true
           fi
           echo "environment=$ENV" >> $GITHUB_OUTPUT
@@ -188,7 +188,7 @@ jobs:
 
           ssh -o StrictHostKeyChecking=no -i private_key.pem \
             ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }} << EOF
-            set -e
+            set -ex
             echo "--- Remote script variables ---"
             echo "REMOTE_DIR is: ${{ steps.vars.outputs.remote_dir }}"
             echo "REPO_URL is: ${{ steps.vars.outputs.repo_url }}"
