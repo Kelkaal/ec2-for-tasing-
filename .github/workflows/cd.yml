@@ -104,7 +104,7 @@ jobs:
             BRANCH=main
             SERVER_USER=${{ secrets.PROD_USER }}
             SERVER_IP=${{ secrets.PROD_IP }}
-            SERVER_PASS=${{ secrets.PROD_PASS }}
+            SSH_KEY=${{ secrets.PROD_PASS }}
             DB_NAME=${{ secrets.DB_NAME }}
             REMOTE_DIR="/home/ifeanyinw/apps/backend/legal-watch-dog-be"
             REPO_URL="https://github.com/hngprojects/legal-watch-dog-be.git"
@@ -114,7 +114,7 @@ jobs:
             BRANCH=dev
             SERVER_USER=${{ secrets.STAGING_USER }}
             SERVER_IP=${{ secrets.STAGING_IP }}
-            SERVER_PASS=${{ secrets.STAGING_PASS }}
+            SSH_KEY=${{ secrets.STAGING_PASS }}
             DB_NAME=${{ secrets.STAGING_DB_NAME }}
             REMOTE_DIR="/home/ubuntu/apps/backend/ec2-for-tasing"
             REPO_URL="https://github.com/PreciousEzeigbo/legal-watch-dog-be.git"
@@ -124,7 +124,7 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "server_user=$SERVER_USER" >> $GITHUB_OUTPUT
           echo "server_ip=$SERVER_IP" >> $GITHUB_OUTPUT
-          echo "server_pass=$SERVER_PASS" >> $GITHUB_OUTPUT
+          echo "ssh_key=$SSH_KEY" >> $GITHUB_OUTPUT
           echo "db_name=$DB_NAME" >> $GITHUB_OUTPUT
           echo "remote_dir=$REMOTE_DIR" >> $GITHUB_OUTPUT
           echo "repo_url=$REPO_URL" >> $GITHUB_OUTPUT
@@ -155,10 +155,7 @@ jobs:
           MAIL_ENCRYPTION="${{ secrets.MAIL_ENCRYPTION }}"
           EMAIL="${{ secrets.EMAIL }}"
           MAIL_FROM_NAME="LEGAL WATCH DOG"
-          APP_URL="${{ vars.APP_URL || 'https://minamoto.emerj.net' }}"
-          DEV_URL="${{ vars.DEV_URL || 'http://localhost:3000' }}"
           REDIS_URL="${{ secrets.REDIS_URL }}"
-          REDIS_CACHE_TTL_SECONDS="${{ secrets.REDIS_CACHE_TTL_SECONDS }}"
           JWT_SECRET="${{ secrets.JWT_SECRET }}"
           JWT_ALGORITHM="${{ secrets.JWT_ALGORITHM }}"
           JWT_EXPIRY="${{ secrets.JWT_EXPIRY }}"
@@ -168,40 +165,50 @@ jobs:
           ENCRYPTION_KEY="${{ secrets.ENCRYPTION_KEY }}"
           EOF
 
-      - name: Setup SSH
+      - name: Setup SSH key
         run: |
-          echo "${{ steps.vars.outputs.server_pass }}" > private_key.pem
+          echo "${{ steps.vars.outputs.ssh_key }}" > private_key.pem
           chmod 400 private_key.pem
 
       - name: Deploy to server
         run: |
+          scp -o StrictHostKeyChecking=no -i private_key.pem .env.${{ steps.vars.outputs.environment }} \
+            ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }}:/tmp/backend_env
+
           ssh -o StrictHostKeyChecking=no -i private_key.pem \
-            ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }} << 'EOF'
+            ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }} << EOF
             set -e
             REMOTE_DIR="${{ steps.vars.outputs.remote_dir }}"
             REPO_URL="${{ steps.vars.outputs.repo_url }}"
             BRANCH="${{ steps.vars.outputs.branch }}"
             ENV="${{ steps.vars.outputs.environment }}"
+
             if [ ! -d "$REMOTE_DIR" ]; then
               mkdir -p $(dirname "$REMOTE_DIR")
               git clone "$REPO_URL" "$REMOTE_DIR"
             fi
+
             cd "$REMOTE_DIR"
             git pull origin "$BRANCH"
             mv /tmp/backend_env .env
+
             if ! command -v uv &> /dev/null; then
               curl -LsSf https://astral.sh/uv/install.sh | sh
               export PATH="$HOME/.local/bin:$PATH"
             fi
+
             uv sync
             uv run alembic upgrade head
+
             set -a
             source .env
             set +a
+
             PM2_APP_NAME="legal-watchdog-be-$ENV"
             if ! command -v pm2 &> /dev/null; then
               npm install -g pm2
             fi
+
             pm2 describe "$PM2_APP_NAME" > /dev/null 2>&1 && pm2 delete "$PM2_APP_NAME" || echo "No existing process found"
             pm2 start ecosystem.config.js --update-env
             pm2 save
@@ -239,4 +246,3 @@ jobs:
             ]
           }"
           curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" $SLACK_WEBHOOK
-          
