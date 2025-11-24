@@ -1,49 +1,161 @@
-name: Backend CD - Deploy
+name: Backend CI/CD
 
 on:
-  workflow_dispatch:
   push:
     branches:
+      - dev
       - main
+  pull_request:
+    branches:
+      - dev
+      - main
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
 
 jobs:
-  deploy_main:
-    name: CD - Backend Deploy (Main)
+  ci:
+    name: CI - Test, Lint & Build
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: dbname
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate main environment file
-        run: |
-          cat <<EOF > .env.main
-          DEBUG=False
-          APP_PORT="${{ secrets.APP_PORT || vars.APP_PORT || '8001' }}"
-          APP_NAME="${{ vars.APP_NAME || 'LEGAL WATCH DOG' }}"
-          APP_VERSION="${{ vars.APP_VERSION || '1.0.0' }}"
-          ENVIRONMENT="main"
-          SECRET_KEY="${{ secrets.SECRET_KEY }}"
-          LEGAL_WATCH_DOG_BASE_URL="${{ secrets.BASE_URL || vars.BASE_URL }}"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
-          DB_TYPE="${{ vars.DB_TYPE || 'postgresql' }}"
+      - name: Install uv
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+
+      - name: Create virtual environment & install dependencies
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          uv sync
+
+      - name: Lint & format check
+        run: |
+          source .venv/bin/activate
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Run database migrations
+        run: |
+          source .venv/bin/activate
+          uv run alembic upgrade head
+
+      - name: Run tests
+        run: |
+          source .venv/bin/activate
+          uv run pytest tests/ --verbose
+
+      - name: Build project
+        run: |
+          source .venv/bin/activate
+          uv build
+          echo "Build completed successfully."
+
+  cd:
+    name: CD - Deploy Backend
+    runs-on: ubuntu-latest
+    needs: ci
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set deployment variables
+        id: vars
+        run: |
+          if [ "${GITHUB_REF}" == "refs/heads/main" ]; then
+            ENV=production
+            BRANCH=main
+            SERVER_USER=${{ secrets.PROD_USER }}
+            SERVER_IP=${{ secrets.PROD_IP }}
+            SERVER_PASS=${{ secrets.PROD_PASS }}
+            DB_NAME=${{ secrets.DB_NAME }}
+            REMOTE_DIR="/home/ifeanyinw/apps/backend/legal-watch-dog-be"
+            REPO_URL="https://github.com/hngprojects/legal-watch-dog-be.git"
+            ALLOW_TEST_EMAILS=false
+          else
+            ENV=staging
+            BRANCH=dev
+            SERVER_USER=${{ secrets.STAGING_USER }}
+            SERVER_IP=${{ secrets.STAGING_IP }}
+            SERVER_PASS=${{ secrets.STAGING_PASS }}
+            DB_NAME=${{ secrets.STAGING_DB_NAME }}
+            REMOTE_DIR="/home/ubuntu/apps/backend/ec2-for-tasing"
+            REPO_URL="https://github.com/PreciousEzeigbo/legal-watch-dog-be.git"
+            ALLOW_TEST_EMAILS=true
+          fi
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "server_user=$SERVER_USER" >> $GITHUB_OUTPUT
+          echo "server_ip=$SERVER_IP" >> $GITHUB_OUTPUT
+          echo "server_pass=$SERVER_PASS" >> $GITHUB_OUTPUT
+          echo "db_name=$DB_NAME" >> $GITHUB_OUTPUT
+          echo "remote_dir=$REMOTE_DIR" >> $GITHUB_OUTPUT
+          echo "repo_url=$REPO_URL" >> $GITHUB_OUTPUT
+          echo "allow_test_emails=$ALLOW_TEST_EMAILS" >> $GITHUB_OUTPUT
+
+      - name: Generate .env file
+        run: |
+          cat <<EOF > .env.${{ steps.vars.outputs.environment }}
+          DEBUG=False
+          APP_PORT="${{ secrets.APP_PORT || '8001' }}"
+          APP_NAME="LEGAL WATCH DOG"
+          APP_VERSION="1.0.0"
+          ENVIRONMENT="${{ steps.vars.outputs.environment }}"
+          SECRET_KEY="${{ secrets.SECRET_KEY }}"
+          LEGAL_WATCH_DOG_BASE_URL="${{ secrets.BASE_URL }}"
+          DB_TYPE="postgresql"
           DB_HOST="${{ secrets.DB_HOST }}"
           DB_PORT="${{ secrets.DB_PORT }}"
           DB_USER="${{ secrets.DB_USER }}"
           DB_PASS="${{ secrets.DB_PASS }}"
-          DB_NAME="${{ secrets.DB_NAME }}"
-          DATABASE_URL="postgresql+asyncpg://${{ secrets.DB_USER }}:${{ secrets.DB_PASS }}@${{ secrets.DB_HOST }}/${{ secrets.DB_NAME }}"
-
-          MAIL_MAILER="${{ vars.MAIL_MAILER || 'smtp' }}"
+          DB_NAME="${{ steps.vars.outputs.db_name }}"
+          DATABASE_URL="postgresql+asyncpg://${{ secrets.DB_USER }}:${{ secrets.DB_PASS }}@${{ secrets.DB_HOST }}/${{ steps.vars.outputs.db_name }}"
+          MAIL_MAILER="smtp"
           SMTP_SERVER="${{ secrets.SMTP_SERVER }}"
           SMTP_PORT="${{ secrets.SMTP_PORT }}"
           MAIL_USERNAME="${{ secrets.MAIL_USERNAME }}"
           MAIL_PASSWORD="${{ secrets.MAIL_PASSWORD }}"
           MAIL_ENCRYPTION="${{ secrets.MAIL_ENCRYPTION }}"
           EMAIL="${{ secrets.EMAIL }}"
-          MAIL_FROM_NAME="${{ vars.MAIL_FROM_NAME || 'LEGAL WATCH DOG' }}"
-
-          APP_URL="${{ vars.APP_URL || '3.80.70.234' }}"
+          MAIL_FROM_NAME="LEGAL WATCH DOG"
+          APP_URL="${{ vars.APP_URL || 'https://minamoto.emerj.net' }}"
           DEV_URL="${{ vars.DEV_URL || 'http://localhost:3000' }}"
           REDIS_URL="${{ secrets.REDIS_URL }}"
           REDIS_CACHE_TTL_SECONDS="${{ secrets.REDIS_CACHE_TTL_SECONDS }}"
@@ -51,83 +163,80 @@ jobs:
           JWT_ALGORITHM="${{ secrets.JWT_ALGORITHM }}"
           JWT_EXPIRY="${{ secrets.JWT_EXPIRY }}"
           ACCESS_TOKEN_EXPIRATION="${{ secrets.ACCESS_TOKEN_EXPIRATION }}"
-
-          ALLOW_TEST_EMAIL_PROVIDERS="${{ vars.ALLOW_TEST_EMAIL_PROVIDERS || 'false' }}"
-          TEST_EMAIL_PROVIDERS="${{ vars.TEST_EMAIL_PROVIDERS || 'gmail.com' }}"
+          ALLOW_TEST_EMAIL_PROVIDERS="${{ steps.vars.outputs.allow_test_emails }}"
+          TEST_EMAIL_PROVIDERS="gmail.com"
           ENCRYPTION_KEY="${{ secrets.ENCRYPTION_KEY }}"
           EOF
 
-      - name: Install sshpass
-        run: sudo apt-get update && sudo apt-get install -y sshpass
-
-      - name: Upload .env file to server
+      - name: Setup SSH
         run: |
-          sshpass -p "${{ secrets.PROD_PASS }}" scp -o StrictHostKeyChecking=no .env.main ${{ secrets.PROD_USER }}@${{ secrets.PROD_IP }}:/tmp/backend_env
+          echo "${{ steps.vars.outputs.server_pass }}" > private_key.pem
+          chmod 400 private_key.pem
 
-      - name: Set up SSH and Deploy
-        env:
-          SERVER_PASS: ${{ secrets.PROD_PASS }}
-          SERVER_USER: ${{ secrets.PROD_USER }}
-          SERVER_IP: ${{ secrets.PROD_IP }}
+      - name: Deploy to server
         run: |
-          sshpass -p "$SERVER_PASS" ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_IP << 'EOF'
+          ssh -o StrictHostKeyChecking=no -i private_key.pem \
+            ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }} << 'EOF'
             set -e
-
-            REMOTE_DIR="/home/ubuntu/apps/backend/ec2-for-tasing-"
-            
-            # Clone if the directory doesn't exist
+            REMOTE_DIR="${{ steps.vars.outputs.remote_dir }}"
+            REPO_URL="${{ steps.vars.outputs.repo_url }}"
+            BRANCH="${{ steps.vars.outputs.branch }}"
+            ENV="${{ steps.vars.outputs.environment }}"
             if [ ! -d "$REMOTE_DIR" ]; then
-              cd /home/ubuntu/apps/backend/
-              git clone https://github.com/Kelkaal/ec2-for-tasing-.git "$REMOTE_DIR"
+              mkdir -p $(dirname "$REMOTE_DIR")
+              git clone "$REPO_URL" "$REMOTE_DIR"
             fi
-
             cd "$REMOTE_DIR"
-            
-            git pull origin main
-            
+            git pull origin "$BRANCH"
             mv /tmp/backend_env .env
-
-            # Install uv if not present
             if ! command -v uv &> /dev/null; then
               curl -LsSf https://astral.sh/uv/install.sh | sh
               export PATH="$HOME/.local/bin:$PATH"
             fi
-            
             uv sync
             uv run alembic upgrade head
-            
-            set -a 
-            source .env 
+            set -a
+            source .env
             set +a
-            
-            PM2_APP_NAME="legal-watchdog-be-main"
-            
+            PM2_APP_NAME="legal-watchdog-be-$ENV"
             if ! command -v pm2 &> /dev/null; then
               npm install -g pm2
             fi
-            
-            if pm2 describe "$PM2_APP_NAME" > /dev/null 2>&1; then
-              PM2_STATUS=$(pm2 jlist | jq -r ".[] | select(.name==\"$PM2_APP_NAME\") | .pm2_env.status" 2>/dev/null || echo "stopped")
-              if [ "$PM2_STATUS" == "errored" ] || [ "$PM2_STATUS" == "stopped" ]; then
-                pm2 delete "$PM2_APP_NAME" || true
-              fi
-            fi
-            
-            cat > start_app.sh << 'SCRIPTEND'
-            #!/bin/bash
-            cd /home/ubuntu/apps/backend/ec2-for-tasing-
-            source .env
-            uv run uvicorn main:app --host 0.0.0.0 --port $APP_PORT
-            SCRIPTEND
-            
-            chmod +x start_app.sh
-            
-            if pm2 describe "$PM2_APP_NAME" > /dev/null 2>&1; then
-              pm2 restart "$PM2_APP_NAME" --update-env
-            else
-              pm2 start ./start_app.sh --name "$PM2_APP_NAME"
-            fi
-            
+            pm2 describe "$PM2_APP_NAME" > /dev/null 2>&1 && pm2 delete "$PM2_APP_NAME" || echo "No existing process found"
+            pm2 start ecosystem.config.js --update-env
             pm2 save
             pm2 startup systemd -u $(whoami) --hp $(echo $HOME) || true
+            pm2 status
           EOF
+
+  notify_slack:
+    name: Notify Slack
+    runs-on: ubuntu-latest
+    needs: cd
+    if: always()
+    steps:
+      - name: Send Slack Notification
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          DEPLOY_RESULT: ${{ needs.cd.result }}
+        run: |
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          ENV_NAME="${BRANCH_NAME == 'main' && 'Production' || 'Staging'}"
+          STATUS_COLOR="${DEPLOY_RESULT == 'success' && 'good' || 'danger'}"
+          MAIN_STATUS="${DEPLOY_RESULT == 'success' && '✅ Deployment Successful' || '❌ Deployment Failed'}"
+          LOG_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          PAYLOAD="{
+            \"attachments\": [
+              {
+                \"color\": \"${STATUS_COLOR}\",
+                \"blocks\": [
+                  {\"type\": \"header\", \"text\": {\"type\": \"plain_text\", \"text\": \"⚙️ Backend Deployment Update\", \"emoji\": true}},
+                  {\"type\": \"section\", \"text\": {\"type\": \"mrkdwn\", \"text\": \"*${MAIN_STATUS}* Environment: ${ENV_NAME}\nBranch: ${BRANCH_NAME}\nTriggered by: ${GITHUB_ACTOR}\"}},
+                  {\"type\": \"divider\"},
+                  {\"type\": \"section\", \"text\": {\"type\": \"mrkdwn\", \"text\": \"Check <${LOG_LINK}|logs> or contact dev team.\"}}
+                ]
+              }
+            ]
+          }"
+          curl -X POST -H 'Content-type: application/json' --data "$PAYLOAD" $SLACK_WEBHOOK
+          
