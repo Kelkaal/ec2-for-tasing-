@@ -28,7 +28,6 @@ ENV/
 .env
 
 # VSCode
-.vscode/
 .history/
 *.code-workspace
 
@@ -41,6 +40,7 @@ ENV/
 # Mypy
 .mypy_cache/
 .dmypy.json
+temp_auto_push.bat
 dmypy.json
 
 # Pytest
@@ -84,3 +84,5 @@ __pypackages__/
 
 # Ruff cache
 .ruff_cache/
+.gitignore
+branch_structure.json
