@@ -100,6 +100,7 @@ jobs:
           PROD_SSH_KEY: ${{ secrets.PROD_PASS }}
           STAGING_SSH_KEY: ${{ secrets.STAGING_PASS }}
         run: |
+          set -ex
           if [ "$GITHUB_REF" == "refs/heads/main" ]; then
             ENV=production
             BRANCH=main
@@ -118,7 +119,7 @@ jobs:
             SSH_KEY_CONTENT="$STAGING_SSH_KEY"
             DB_NAME=${{ secrets.STAGING_DB_NAME }}
             REMOTE_DIR="/home/ubuntu/apps/backend/ec2-for-tasing"
-            RREPO_URL="https://github.com/Kelkaal/ec2-for-tasing-.git"
+            REPO_URL="https://github.com/Kelkaal/ec2-for-tasing-.git"
             ALLOW_TEST_EMAILS=true
           fi
           echo "environment=$ENV" >> $GITHUB_OUTPUT
