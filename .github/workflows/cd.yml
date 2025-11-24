@@ -173,52 +173,63 @@ jobs:
           echo "${{ steps.vars.outputs.ssh_key }}" > private_key.pem
           chmod 400 private_key.pem
 
-      - name: Deploy to server
-        run: |
-          scp -o StrictHostKeyChecking=no -i private_key.pem .env.${{ steps.vars.outputs.environment }} \
-            ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }}:/tmp/backend_env
-
-          ssh -o StrictHostKeyChecking=no -i private_key.pem \
-            ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }} << EOF
-            set -e
-            REMOTE_DIR="${{ steps.vars.outputs.remote_dir }}"
-            REPO_URL="${{ steps.vars.outputs.repo_url }}"
-            BRANCH="${{ steps.vars.outputs.branch }}"
-            ENV="${{ steps.vars.outputs.environment }}"
-
-            if [ ! -d "$REMOTE_DIR" ]; then
-              mkdir -p $(dirname "$REMOTE_DIR")
-              git clone "$REPO_URL" "$REMOTE_DIR"
-            fi
-
-            cd "$REMOTE_DIR"
-            git pull origin "$BRANCH"
-            mv /tmp/backend_env .env
-
-            if ! command -v uv &> /dev/null; then
-              curl -LsSf https://astral.sh/uv/install.sh | sh
-              export PATH="$HOME/.local/bin:$PATH"
-            fi
-
-            uv sync
-            uv run alembic upgrade head
-
-            set -a
-            source .env
-            set +a
-
-            PM2_APP_NAME="legal-watchdog-be-$ENV"
-            if ! command -v pm2 &> /dev/null; then
-              npm install -g pm2
-            fi
-
-            pm2 describe "$PM2_APP_NAME" > /dev/null 2>&1 && pm2 delete "$PM2_APP_NAME" || echo "No existing process found"
-            pm2 start ecosystem.config.js --update-env
-            pm2 save
-            pm2 startup systemd -u $(whoami) --hp $(echo $HOME) || true
-            pm2 status
-          EOF
-
+            - name: Deploy to server
+              run: |
+                echo "--- Debugging deployment variables ---"
+                echo "ENV: ${{ steps.vars.outputs.environment }}"
+                echo "BRANCH: ${{ steps.vars.outputs.branch }}"
+                echo "SERVER_USER: ${{ steps.vars.outputs.server_user }}"
+                echo "SERVER_IP: ${{ steps.vars.outputs.server_ip }}"
+                echo "REMOTE_DIR: ${{ steps.vars.outputs.remote_dir }}"
+                echo "REPO_URL: ${{ steps.vars.outputs.repo_url }}"
+                echo "------------------------------------"
+                scp -o StrictHostKeyChecking=no -i private_key.pem .env.${{ steps.vars.outputs.environment }} \
+                  ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }}:/tmp/backend_env
+      
+                ssh -o StrictHostKeyChecking=no -i private_key.pem \
+                  ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }} << EOF
+                  set -e
+                  echo "--- Remote script variables ---"
+                  echo "REMOTE_DIR is: ${{ steps.vars.outputs.remote_dir }}"
+                  echo "REPO_URL is: ${{ steps.vars.outputs.repo_url }}"
+                  echo "-------------------------------"
+                  REMOTE_DIR="${{ steps.vars.outputs.remote_dir }}"
+                  REPO_URL="${{ steps.vars.outputs.repo_url }}"
+                  BRANCH="${{ steps.vars.outputs.branch }}"
+                  ENV="${{ steps.vars.outputs.environment }}"
+      
+                  if [ ! -d "$REMOTE_DIR" ]; then
+                    mkdir -p $(dirname "$REMOTE_DIR")
+                    git clone "$REPO_URL" "$REMOTE_DIR"
+                  fi
+      
+                  cd "$REMOTE_DIR"
+                  git pull origin "$BRANCH"
+                  mv /tmp/backend_env .env
+      
+                  if ! command -v uv &> /dev/null; then
+                    curl -LsSf https://astral.sh/uv/install.sh | sh
+                    export PATH="$HOME/.local/bin:$PATH"
+                  fi
+      
+                  uv sync
+                  uv run alembic upgrade head
+      
+                  set -a
+                  source .env
+                  set +a
+      
+                  PM2_APP_NAME="legal-watchdog-be-$ENV"
+                  if ! command -v pm2 &> /dev/null; then
+                    npm install -g pm2
+                  fi
+      
+                  pm2 describe "$PM2_APP_NAME" > /dev/null 2>&1 && pm2 delete "$PM2_APP_NAME" || echo "No existing process found"
+                  pm2 start ecosystem.config.js --update-env
+                  pm2 save
+                  pm2 startup systemd -u $(whoami) --hp $(echo $HOME) || true
+                  pm2 status
+                EOF
   notify_slack:
     name: Notify Slack
     runs-on: ubuntu-latest
