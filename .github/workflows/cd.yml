@@ -1,5 +1,3 @@
-name: Backend CI/CD
-
 on:
   push:
     branches:
@@ -98,13 +96,16 @@ jobs:
 
       - name: Set deployment variables
         id: vars
+        env:
+          PROD_SSH_KEY: ${{ secrets.PROD_PASS }}
+          STAGING_SSH_KEY: ${{ secrets.STAGING_PASS }}
         run: |
-          if [ "${GITHUB_REF}" == "refs/heads/main" ]; then
+          if [ "$GITHUB_REF" == "refs/heads/main" ]; then
             ENV=production
             BRANCH=main
             SERVER_USER=${{ secrets.PROD_USER }}
             SERVER_IP=${{ secrets.PROD_IP }}
-            SSH_KEY=${{ secrets.PROD_PASS }}
+            SSH_KEY_CONTENT="$PROD_SSH_KEY"
             DB_NAME=${{ secrets.DB_NAME }}
             REMOTE_DIR="/home/ifeanyinw/apps/backend/legal-watch-dog-be"
             REPO_URL="https://github.com/hngprojects/legal-watch-dog-be.git"
@@ -114,7 +115,7 @@ jobs:
             BRANCH=dev
             SERVER_USER=${{ secrets.STAGING_USER }}
             SERVER_IP=${{ secrets.STAGING_IP }}
-            SSH_KEY=${{ secrets.STAGING_PASS }}
+            SSH_KEY_CONTENT="$STAGING_SSH_KEY"
             DB_NAME=${{ secrets.STAGING_DB_NAME }}
             REMOTE_DIR="/home/ubuntu/apps/backend/ec2-for-tasing"
             REPO_URL="https://github.com/PreciousEzeigbo/legal-watch-dog-be.git"
@@ -124,11 +125,13 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "server_user=$SERVER_USER" >> $GITHUB_OUTPUT
           echo "server_ip=$SERVER_IP" >> $GITHUB_OUTPUT
-          echo "ssh_key=$SSH_KEY" >> $GITHUB_OUTPUT
           echo "db_name=$DB_NAME" >> $GITHUB_OUTPUT
           echo "remote_dir=$REMOTE_DIR" >> $GITHUB_OUTPUT
           echo "repo_url=$REPO_URL" >> $GITHUB_OUTPUT
           echo "allow_test_emails=$ALLOW_TEST_EMAILS" >> $GITHUB_OUTPUT
+          echo "ssh_key<<EOF" >> $GITHUB_OUTPUT
+          echo "$SSH_KEY_CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Generate .env file
         run: |
@@ -252,7 +255,7 @@ jobs:
                 \"color\": \"${STATUS_COLOR}\",
                 \"blocks\": [
                   {\"type\": \"header\", \"text\": {\"type\": \"plain_text\", \"text\": \"⚙️ Backend Deployment Update\", \"emoji\": true}},
-                  {\"type\": \"section\", \"text\": {\"type\": \"mrkdwn\", \"text\": \"*${MAIN_STATUS}* Environment: ${ENV_NAME}\nBranch: ${BRANCH_NAME}\nTriggered by: ${GITHUB_ACTOR}\"}},
+                  {\"type\": \"section\", \"text\": {\"type\": \"mrkdwn\", \"text\": \"*${MAIN_STATUS}* Environment: ${ENV_NAME}\\nBranch: ${BRANCH_NAME}\\nTriggered by: ${GITHUB_ACTOR}\"}},
                   {\"type\": \"divider\"},
                   {\"type\": \"section\", \"text\": {\"type\": \"mrkdwn\", \"text\": \"Check <${LOG_LINK}|logs> or contact dev team.\"}}
                 ]
