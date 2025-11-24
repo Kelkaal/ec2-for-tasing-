@@ -176,58 +176,89 @@ jobs:
 
       - name: Deploy to server
         run: |
+          # 1. Create the deployment script locally
+          cat << 'EOS' > deploy.sh
+          #!/bin/bash
+          set -ex
+
+          echo "--- Remote script starting ---"
+
+          # This block now runs on the remote server.
+          # It receives arguments from the ssh command below.
+          REMOTE_DIR="$1"
+          REPO_URL="$2"
+          BRANCH="$3"
+          ENV_NAME="$4"
+
+          if [ ! -d "$REMOTE_DIR" ]; then
+            echo "Cloning repository..."
+            mkdir -p "$(dirname "$REMOTE_DIR")"
+            git clone "$REPO_URL" "$REMOTE_DIR"
+          fi
+
+          cd "$REMOTE_DIR"
+          echo "Pulling latest changes..."
+          git pull origin "$BRANCH"
+          mv /tmp/backend_env .env
+
+          echo "Setting up environment..."
+          if ! command -v uv &> /dev/null; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+          fi
+          uv sync
+
+          echo "Running alembic migrations..."
+          output=$(uv run alembic upgrade head 2>&1) || exit_code=$?
+          echo "$output"
+          if [ "${exit_code:-0}" -ne 0 ]; then
+              if [[ "$output" == *"already exists"* ]]; then
+                  echo "Ignoring 'already exists' error from Alembic and stamping head."
+                  uv run alembic stamp head
+              else
+                  echo "Alembic upgrade failed with exit code $exit_code."
+                  exit 1
+              fi
+          fi
+
+          echo "Restarting application with PM2..."
+          set -a
+          source .env
+          set +a
+
+          PM2_APP_NAME="legal-watchdog-be-$ENV_NAME"
+          if ! command -v pm2 &> /dev/null; then
+            npm install -g pm2
+          fi
+
+          pm2 describe "$PM2_APP_NAME" > /dev/null 2>&1 && pm2 delete "$PM2_APP_NAME" || echo "No existing process found"
+          pm2 start ecosystem.config.js --update-env
+          pm2 save
+          pm2 startup systemd -u "$(whoami)" --hp "$(echo "$HOME")" || true
+          pm2 status
+          
+          echo "--- Remote script finished ---"
+          EOS
+
+          # 2. Ensure script has correct line endings (LF instead of CRLF)
+          sed -i 's/\r$//' deploy.sh
+
+          # 3. SCP the .env file first
           scp -o StrictHostKeyChecking=no -i private_key.pem .env.${{ steps.vars.outputs.environment }} \
             ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }}:/tmp/backend_env
 
+          # 4. SCP the script to the remote server
+          scp -o StrictHostKeyChecking=no -i private_key.pem deploy.sh \
+            ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }}:/tmp/deploy.sh
+
+          # 5. Execute the script on the remote server
           ssh -o StrictHostKeyChecking=no -i private_key.pem \
-            ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }} << EOF
-            set -e
-
-            if [ ! -d "${{ steps.vars.outputs.remote_dir }}" ]; then
-              mkdir -p "$(dirname "${{ steps.vars.outputs.remote_dir }}")"
-              git clone "${{ steps.vars.outputs.repo_url }}" "${{ steps.vars.outputs.remote_dir }}"
-            fi
-
-            cd "${{ steps.vars.outputs.remote_dir }}"
-            git pull origin "${{ steps.vars.outputs.branch }}"
-            mv /tmp/backend_env .env
-
-            if ! command -v uv &> /dev/null; then
-              curl -LsSf https://astral.sh/uv/install.sh | sh
-              export PATH="$HOME/.local/bin:$PATH"
-            fi
-
-            uv sync
-            echo "Running alembic migrations..."
-            output=$(uv run alembic upgrade head 2>&1)
-            exit_code=$?
-            echo "$output"
-
-            if [ $exit_code -ne 0 ]; then
-                if [[ "$output" == *"already exists"* ]]; then
-                    echo "Ignoring 'already exists' error from Alembic and stamping head."
-                    uv run alembic stamp head
-                else
-                    echo "Alembic upgrade failed with exit code $exit_code."
-                    exit 1
-                fi
-            fi
-
-            set -a
-            source .env
-            set +a
-
-            PM2_APP_NAME="legal-watchdog-be-${{ steps.vars.outputs.environment }}"
-            if ! command -v pm2 &> /dev/null; then
-              npm install -g pm2
-            fi
-
-            pm2 describe "$PM2_APP_NAME" > /dev/null 2>&1 && pm2 delete "$PM2_APP_NAME" || echo "No existing process found"
-            pm2 start ecosystem.config.js --update-env
-            pm2 save
-            pm2 startup systemd -u "$(whoami)" --hp "$(echo "$HOME")" || true
-            pm2 status
-          EOF
+            ${{ steps.vars.outputs.server_user }}@${{ steps.vars.outputs.server_ip }} \
+            "bash /tmp/deploy.sh \
+              '${{ steps.vars.outputs.remote_dir }}' \
+              '${{ steps.vars.outputs.repo_url }}' \
+              '${{ steps.vars.outputs.branch }}' \
+              '${{ steps.vars.outputs.environment }}'"
   notify_slack:
     name: Notify Slack
     runs-on: ubuntu-latest
