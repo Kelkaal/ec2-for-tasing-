@@ -198,7 +198,16 @@ jobs:
             fi
 
             uv sync
-            uv run alembic upgrade head
+            output=$(uv run alembic upgrade head 2>&1) && echo "$output" || {
+                if [[ "$output" == *"already exists"* ]]; then
+                    echo "Ignoring 'already exists' error from Alembic and stamping head."
+                    uv run alembic stamp head
+                else
+                    echo "Alembic upgrade failed:"
+                    echo "$output"
+                    exit 1
+                fi
+            }
 
             set -a
             source .env
