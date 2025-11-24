@@ -228,9 +228,23 @@ jobs:
           DEPLOY_RESULT: ${{ needs.cd.result }}
         run: |
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-          ENV_NAME="${BRANCH_NAME == 'main' && 'Production' || 'Staging'}"
-          STATUS_COLOR="${DEPLOY_RESULT == 'success' && 'good' || 'danger'}"
-          MAIN_STATUS="${DEPLOY_RESULT == 'success' && '✅ Deployment Successful' || '❌ Deployment Failed'}"
+
+          # Determine environment name
+          if [ "$BRANCH_NAME" == "main" ]; then
+            ENV_NAME="Production"
+          else
+            ENV_NAME="Staging"
+          fi
+
+          # Determine status
+          if [ "$DEPLOY_RESULT" == "success" ]; then
+            STATUS_COLOR="good"
+            MAIN_STATUS="✅ Deployment Successful"
+          else
+            STATUS_COLOR="danger"
+            MAIN_STATUS="❌ Deployment Failed"
+          fi
+
           LOG_LINK="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           PAYLOAD="{
             \"attachments\": [
